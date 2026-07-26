@@ -1,5 +1,4 @@
-/*
- * Runtime Classes for windows.ui.core.textinput.dll
+/* WinRT Windows.UI.Text.Core.CoreTextEditContext Implementation
  *
  * Written by Weather
  *
@@ -18,22 +17,15 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#pragma makedep register
-#pragma winrt ns_prefix
+#ifndef EDITCONTEXT_H
+#define EDITCONTEXT_H
 
-import "inspectable.idl";
-import "asyncinfo.idl";
-import "eventtoken.idl";
-import "windows.foundation.idl";
-import "windowscontracts.idl";
-import "windows.system.idl";
-import "windows.ui.text.core.idl";
-import "windows.ui.viewmanagement.core.idl";
+#include "private.h"
 
-namespace Windows.UI.ViewManagement.Core {
-    runtimeclass CoreInputView;
-}
+struct core_text_edit_context
+{
+    ICoreTextEditContext ICoreTextEditContext_iface;
+    LONG ref;
+};
 
-namespace Windows.UI.Text.Core {
-    runtimeclass CoreTextServicesManager;
-}
+#endif

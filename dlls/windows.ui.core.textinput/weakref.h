@@ -20,7 +20,7 @@
 #ifndef __WINE_WEAKREF_H
 #define __WINE_WEAKREF_H
 
-#include "weakreference.h"
+#include "private.h"
 
 struct weak_reference_source
 {

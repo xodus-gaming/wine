@@ -4,5 +4,8 @@ IMPORTS = combase
 SOURCES = \
 	classes.idl \
 	main.c \
+	services.c \
+	inputview.c \
+	weakref.c \
 	vector.c \
-	weakref.c
+	editcontext.c

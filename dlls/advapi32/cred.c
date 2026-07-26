@@ -454,6 +454,9 @@ static BOOL registry_credential_matches_filter(HKEY hkeyCred, LPCWSTR filter)
     DWORD type;
     DWORD count;
     LPCWSTR p;
+    int filter_len;
+    int target_len;
+    int compare_result;
 
     if (!filter) return TRUE;
 
@@ -477,9 +480,14 @@ static BOOL registry_credential_matches_filter(HKEY hkeyCred, LPCWSTR filter)
           debugstr_w(target_name));
 
     p = wcschr(filter, '*');
-    ret = CompareStringW(GetThreadLocale(), NORM_IGNORECASE, filter,
-                         (p && !p[1] ? p - filter : -1), target_name,
-                         (p && !p[1] ? p - filter : -1)) == CSTR_EQUAL;
+    filter_len = (p && !p[1]) ? (int)(p - filter) : -1;
+    target_len = lstrlenW(target_name);
+    compare_result = CompareStringW(GetThreadLocale(), NORM_IGNORECASE, filter,
+                                    filter_len, target_name, filter_len);
+    TRACE("filter raw=%s target raw=%s prefix_len=%d target_len=%d compare_result=%d last_error=%lu\n",
+          debugstr_w(filter), debugstr_w(target_name), filter_len, target_len,
+          compare_result, GetLastError());
+    ret = compare_result == CSTR_EQUAL;
 
     free(target_name);
     return ret;
@@ -513,6 +521,8 @@ static DWORD registry_enumerate_credentials(HKEY hkeyMgr, LPCWSTR filter,
             RegCloseKey(hkeyCred);
             continue;
         }
+        TRACE("matched credential target_name = %s count_before=%lu len_before=%lu buffer=%p\n",
+              debugstr_w(target_name), *count, *len, buffer);
         if (buffer)
         {
             *len = sizeof(CREDENTIALW);
@@ -523,10 +533,14 @@ static DWORD registry_enumerate_credentials(HKEY hkeyMgr, LPCWSTR filter,
         ret = registry_read_credential(hkeyCred, buffer ? credentials[*count] : NULL,
                                        key_data, buffer ? *buffer + sizeof(CREDENTIALW) : NULL,
                                        len);
+        TRACE("registry_read_credential target_name = %s ret=%lu count_before_increment=%lu len_after=%lu buffer=%p\n",
+              debugstr_w(target_name), ret, *count, *len, buffer);
         RegCloseKey(hkeyCred);
         if (ret != ERROR_SUCCESS) break;
         if (buffer) *buffer += *len;
         (*count)++;
+        TRACE("count incremented target_name = %s count_after=%lu buffer=%p\n",
+              debugstr_w(target_name), *count, buffer);
     }
     return ret;
 }
@@ -1056,10 +1070,14 @@ BOOL WINAPI CredEnumerateW(LPCWSTR Filter, DWORD Flags, DWORD *Count, PCREDENTIA
     len = 0;
     ret = registry_enumerate_credentials(hkeyMgr, Filter, target_name, target_name_len,
                                          key_data, NULL, NULL, &len, Count);
+    TRACE("CredEnumerateW first registry pass filter=%s ret=%lu count=%lu len=%lu\n",
+          debugstr_w(Filter), ret, *Count, len);
     if (ret == ERROR_SUCCESS)
     {
         ret = host_enumerate_credentials(Filter, NULL, NULL, &len, Count);
-        if (ret == ERROR_NOT_SUPPORTED) ret = ERROR_SUCCESS;
+        if (ret == ERROR_NOT_SUPPORTED || (ret == ERROR_NOT_FOUND && *Count > 0)) ret = ERROR_SUCCESS;
+        TRACE("CredEnumerateW first host pass filter=%s ret=%lu count=%lu len=%lu\n",
+              debugstr_w(Filter), ret, *Count, len);
     }
     if (ret == ERROR_SUCCESS && *Count == 0)
         ret = ERROR_NOT_FOUND;
@@ -1082,10 +1100,14 @@ BOOL WINAPI CredEnumerateW(LPCWSTR Filter, DWORD Flags, DWORD *Count, PCREDENTIA
             *Count = 0;
             ret = registry_enumerate_credentials(hkeyMgr, Filter, target_name, target_name_len, key_data,
                                                  *Credentials, &buffer, &len, Count);
+            TRACE("CredEnumerateW second registry pass filter=%s ret=%lu count=%lu len=%lu buffer=%p\n",
+                  debugstr_w(Filter), ret, *Count, len, buffer);
             if (ret == ERROR_SUCCESS)
             {
                 ret = host_enumerate_credentials(Filter, *Credentials, buffer, &len, Count);
-                if (ret == ERROR_NOT_SUPPORTED) ret = ERROR_SUCCESS;
+                if (ret == ERROR_NOT_SUPPORTED || (ret == ERROR_NOT_FOUND && *Count > 0)) ret = ERROR_SUCCESS;
+                TRACE("CredEnumerateW second host pass filter=%s ret=%lu count=%lu len=%lu buffer=%p\n",
+                      debugstr_w(Filter), ret, *Count, len, buffer);
             }
         }
         else ret = ERROR_OUTOFMEMORY;
@@ -1096,9 +1118,13 @@ BOOL WINAPI CredEnumerateW(LPCWSTR Filter, DWORD Flags, DWORD *Count, PCREDENTIA
 
     if (ret != ERROR_SUCCESS)
     {
+        TRACE("CredEnumerateW final failure filter=%s ret=%lu count=%lu len=%lu\n",
+              debugstr_w(Filter), ret, *Count, len);
         SetLastError(ret);
         return FALSE;
     }
+    TRACE("CredEnumerateW final success filter=%s count=%lu len=%lu\n",
+          debugstr_w(Filter), *Count, len);
     return TRUE;
 }
 
