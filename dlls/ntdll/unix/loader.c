@@ -1555,7 +1555,32 @@ static inline char *prepend_build_dir_path( char *ptr, const char *ext, const ch
 /***********************************************************************
  *           open_mapped_dll_file
  */
+/***********************************************************************
+ *           open_mapped_dll_file
+ */
 static NTSTATUS open_mapped_dll_file( const UNICODE_STRING *nt_name, HANDLE *mapping )
+{
+    LARGE_INTEGER size;
+    NTSTATUS status;
+    HANDLE handle;
+
+    if ((status = open_mapped_file_handle( nt_name, &handle ))) return status;
+
+    size.QuadPart = 0;
+    status = NtCreateSection( mapping, STANDARD_RIGHTS_REQUIRED | SECTION_QUERY |
+                              SECTION_MAP_READ | SECTION_MAP_EXECUTE,
+                              NULL, &size, PAGE_EXECUTE_READ, SEC_IMAGE, handle );
+    NtClose( handle );
+    return status;
+}
+
+/***********************************************************************
+ *           open_mapped_file_handle
+ *
+ * Resolves an NT name to an inherited file descriptor listed in
+ * WINE_DLL_FILE_MAP, for images that exist only as a memfd and never on disk.
+ */
+NTSTATUS open_mapped_file_handle( const UNICODE_STRING *nt_name, HANDLE *handle )
 {
     const char *value = getenv( "WINE_DLL_FILE_MAP" );
     const char *entry, *sep, *end;
@@ -1577,8 +1602,6 @@ static NTSTATUS open_mapped_dll_file( const UNICODE_STRING *nt_name, HANDLE *map
 
     for (entry = value; *entry; entry = *end ? end + 1 : end)
     {
-        HANDLE handle;
-        LARGE_INTEGER size;
         size_t len;
         int fd = 0;
         const char *p;
@@ -1603,14 +1626,7 @@ static NTSTATUS open_mapped_dll_file( const UNICODE_STRING *nt_name, HANDLE *map
         len = end - sep - 1;
         if (len != allocLen || strncmp( sep + 1, utf8_name, len )) continue;
 
-        if ((status = wine_server_fd_to_handle( fd, GENERIC_READ | SYNCHRONIZE, 0, &handle ))) return status;
-
-        size.QuadPart = 0;
-        status = NtCreateSection( mapping, STANDARD_RIGHTS_REQUIRED | SECTION_QUERY |
-                                  SECTION_MAP_READ | SECTION_MAP_EXECUTE,
-                                  NULL, &size, PAGE_EXECUTE_READ, SEC_IMAGE, handle );
-        NtClose( handle );
-        return status;
+        return wine_server_fd_to_handle( fd, GENERIC_READ | SYNCHRONIZE, 0, handle );
     }
     return STATUS_DLL_NOT_FOUND;
 }

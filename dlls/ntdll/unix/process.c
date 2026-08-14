@@ -270,9 +270,16 @@ static unsigned int get_pe_file_info( OBJECT_ATTRIBUTES *attr, UNICODE_STRING *n
     memset( info, 0, sizeof(*info) );
     if (!(status = get_nt_and_unix_names( attr, nt_name, unix_name, FILE_OPEN, FALSE )))
     {
-        status = open_unix_file( handle, *unix_name, GENERIC_READ, attr, 0,
-                                 FILE_SHARE_READ | FILE_SHARE_DELETE,
-                                 FILE_OPEN, FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0 );
+        /* An image published through WINE_DLL_FILE_MAP exists only as an
+         * inherited fd. The file still on disk is the undecrypted original, so
+         * probing it below yields "not MZ" and CreateProcess reports a bad EXE
+         * format -- the child is never started and its loader never gets the
+         * chance to substitute the mapping. Resolve the fd here so the probe
+         * sees the real image. */
+        if (open_mapped_file_handle( attr->ObjectName, handle ))
+            status = open_unix_file( handle, *unix_name, GENERIC_READ, attr, 0,
+                                     FILE_SHARE_READ | FILE_SHARE_DELETE,
+                                     FILE_OPEN, FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0 );
     }
     if (status)
     {

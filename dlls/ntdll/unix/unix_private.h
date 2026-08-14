@@ -333,6 +333,9 @@ extern void virtual_fill_image_information( const struct pe_image_info *pe_info,
                                             SECTION_IMAGE_INFORMATION *info );
 extern void *get_builtin_so_handle( void *module );
 extern NTSTATUS load_builtin_unixlib( void *module, const char *name );
+/* Resolves an NT name to an inherited fd listed in WINE_DLL_FILE_MAP, for
+ * images that exist only as a memfd and never as a readable file on disk. */
+extern NTSTATUS open_mapped_file_handle( const UNICODE_STRING *nt_name, HANDLE *handle );
 
 extern NTSTATUS get_thread_ldt_entry( HANDLE handle, THREAD_DESCRIPTOR_INFORMATION *info, ULONG len );
 extern void *get_native_context( CONTEXT *context );

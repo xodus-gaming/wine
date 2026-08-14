@@ -1577,12 +1577,313 @@ BOOL WINAPI GetVersionExW( OSVERSIONINFOW *info )
 }
 
 /***********************************************************************
+ *      Current package identity
+ *
+ * Wine has no MSIX deployment, so a process never has package identity and
+ * every GetCurrentPackage* entry point used to answer APPMODEL_ERROR_NO_PACKAGE.
+ * That is fatal for MSIX titles: they query their own identity during start-up
+ * and treat "not packaged" as a broken installation. Minecraft Bedrock, run
+ * from an extracted MSIXVC, refuses to leave its loading screen and reports a
+ * missing component.
+ *
+ * An extracted package still carries its AppxManifest, which holds exactly the
+ * identity the process should have. So derive identity from the manifest next
+ * to the executable. Processes without one keep the old NO_PACKAGE behaviour,
+ * so ordinary Win32 applications are unaffected.
+ */
+
+static UINT32 processor_arch_from_string(const WCHAR *str, unsigned int len);
+
+/* SHA-256. kernelbase imports only ntdll, so there is no bcrypt to call and
+ * the publisher id hash has to be computed locally. */
+struct sha256_ctx
+{
+    UINT32 state[8];
+    UINT64 count;
+    BYTE buffer[64];
+};
+
+static UINT32 sha256_rotr( UINT32 x, int n ) { return (x >> n) | (x << (32 - n)); }
+
+static void sha256_transform( struct sha256_ctx *ctx, const BYTE *data )
+{
+    static const UINT32 k[64] =
+    {
+        0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+        0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+        0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+        0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+        0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+        0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+        0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+        0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2,
+    };
+    UINT32 w[64], a, b, c, d, e, f, g, h, t1, t2;
+    int i;
+
+    for (i = 0; i < 16; i++)
+        w[i] = (data[i * 4] << 24) | (data[i * 4 + 1] << 16) | (data[i * 4 + 2] << 8) | data[i * 4 + 3];
+    for (; i < 64; i++)
+    {
+        UINT32 s0 = sha256_rotr( w[i - 15], 7 ) ^ sha256_rotr( w[i - 15], 18 ) ^ (w[i - 15] >> 3);
+        UINT32 s1 = sha256_rotr( w[i - 2], 17 ) ^ sha256_rotr( w[i - 2], 19 ) ^ (w[i - 2] >> 10);
+        w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+    }
+
+    a = ctx->state[0]; b = ctx->state[1]; c = ctx->state[2]; d = ctx->state[3];
+    e = ctx->state[4]; f = ctx->state[5]; g = ctx->state[6]; h = ctx->state[7];
+
+    for (i = 0; i < 64; i++)
+    {
+        UINT32 s1 = sha256_rotr( e, 6 ) ^ sha256_rotr( e, 11 ) ^ sha256_rotr( e, 25 );
+        UINT32 ch = (e & f) ^ (~e & g);
+        UINT32 s0 = sha256_rotr( a, 2 ) ^ sha256_rotr( a, 13 ) ^ sha256_rotr( a, 22 );
+        UINT32 maj = (a & b) ^ (a & c) ^ (b & c);
+
+        t1 = h + s1 + ch + k[i] + w[i];
+        t2 = s0 + maj;
+        h = g; g = f; f = e; e = d + t1;
+        d = c; c = b; b = a; a = t1 + t2;
+    }
+
+    ctx->state[0] += a; ctx->state[1] += b; ctx->state[2] += c; ctx->state[3] += d;
+    ctx->state[4] += e; ctx->state[5] += f; ctx->state[6] += g; ctx->state[7] += h;
+}
+
+static void sha256_hash( const void *data, SIZE_T len, BYTE digest[32] )
+{
+    struct sha256_ctx ctx;
+    SIZE_T i, used;
+    UINT64 bits;
+
+    ctx.state[0] = 0x6a09e667; ctx.state[1] = 0xbb67ae85;
+    ctx.state[2] = 0x3c6ef372; ctx.state[3] = 0xa54ff53a;
+    ctx.state[4] = 0x510e527f; ctx.state[5] = 0x9b05688c;
+    ctx.state[6] = 0x1f83d9ab; ctx.state[7] = 0x5be0cd19;
+    ctx.count = 0;
+
+    for (i = 0; i + 64 <= len; i += 64) sha256_transform( &ctx, (const BYTE *)data + i );
+    used = len - i;
+    memcpy( ctx.buffer, (const BYTE *)data + i, used );
+    bits = (UINT64)len * 8;
+
+    ctx.buffer[used++] = 0x80;
+    if (used > 56)
+    {
+        memset( ctx.buffer + used, 0, 64 - used );
+        sha256_transform( &ctx, ctx.buffer );
+        used = 0;
+    }
+    memset( ctx.buffer + used, 0, 56 - used );
+    for (i = 0; i < 8; i++) ctx.buffer[56 + i] = (BYTE)(bits >> (56 - i * 8));
+    sha256_transform( &ctx, ctx.buffer );
+
+    for (i = 0; i < 8; i++)
+    {
+        digest[i * 4]     = (BYTE)(ctx.state[i] >> 24);
+        digest[i * 4 + 1] = (BYTE)(ctx.state[i] >> 16);
+        digest[i * 4 + 2] = (BYTE)(ctx.state[i] >> 8);
+        digest[i * 4 + 3] = (BYTE) ctx.state[i];
+    }
+}
+
+/* The publisher id is the first 64 bits of SHA-256(publisher as UTF-16LE),
+ * padded to 65 bits and written as 13 base32 digits over a custom alphabet.
+ * Verified against the two publicly known ids: the Microsoft Corporation
+ * publisher hashes to 8wekyb3d8bbwe and Microsoft Windows to cw5n1h2txyewy. */
+static void publisher_id_from_publisher( const WCHAR *publisher, WCHAR out[14] )
+{
+    static const WCHAR alphabet[] = L"0123456789abcdefghjkmnpqrstvwxyz";
+    BYTE digest[32];
+    UINT64 value = 0;
+    int i;
+
+    sha256_hash( publisher, lstrlenW( publisher ) * sizeof(WCHAR), digest );
+    for (i = 0; i < 8; i++) value = (value << 8) | digest[i];
+
+    /* 13 * 5 == 65 bits, so the 64-bit value is shifted up by one and the top
+     * five bits are consumed first. The shift is folded into the indexing to
+     * keep everything inside 64 bits. */
+    for (i = 0; i < 13; i++)
+    {
+        int shift = 59 - 5 * i;
+        UINT32 digit = shift >= 0 ? (UINT32)(value >> shift) : (UINT32)(value << -shift);
+        out[i] = alphabet[digit & 0x1f];
+    }
+    out[13] = 0;
+}
+
+static WCHAR *package_name, *package_publisher, *package_resource_id, *package_path, *package_app_id;
+static WCHAR package_publisher_id[14];
+static PACKAGE_VERSION package_version;
+static UINT32 package_arch;
+static BOOL package_identity_valid;
+static INIT_ONCE package_identity_once = INIT_ONCE_STATIC_INIT;
+
+/* Minimal attribute scan. A real XML parser is overkill here: AppxManifest is
+ * machine generated and the identity element is a single flat tag. */
+static WCHAR *manifest_attribute( const char *xml, const char *tag, const char *attr )
+{
+    const char *p, *end, *start;
+    int len, wlen;
+    WCHAR *out;
+    char *needle;
+
+    if (!(p = strstr( xml, tag ))) return NULL;
+    if (!(end = strchr( p, '>' ))) return NULL;
+
+    if (!(needle = HeapAlloc( GetProcessHeap(), 0, strlen( attr ) + 3 ))) return NULL;
+    strcpy( needle, attr );
+    strcat( needle, "=\"" );
+
+    start = strstr( p, needle );
+    if (!start || start > end) { HeapFree( GetProcessHeap(), 0, needle ); return NULL; }
+    start += strlen( needle );
+    HeapFree( GetProcessHeap(), 0, needle );
+
+    if (!(p = strchr( start, '"' ))) return NULL;
+    len = p - start;
+
+    wlen = MultiByteToWideChar( CP_UTF8, 0, start, len, NULL, 0 );
+    if (!(out = HeapAlloc( GetProcessHeap(), 0, (wlen + 1) * sizeof(WCHAR) ))) return NULL;
+    MultiByteToWideChar( CP_UTF8, 0, start, len, out, wlen );
+    out[wlen] = 0;
+    return out;
+}
+
+static BOOL WINAPI init_package_identity( INIT_ONCE *once, void *param, void **context )
+{
+    static const WCHAR *manifest_names[] = { L"AppxManifest.xml", L"appxmanifest.xml" };
+    WCHAR exe_path[MAX_PATH], manifest_path[MAX_PATH], *sep;
+    WCHAR *arch_str = NULL, *version_str = NULL;
+    HANDLE file = INVALID_HANDLE_VALUE;
+    DWORD size, read_size;
+    unsigned int i, dir_len;
+    char *xml = NULL;
+
+    if (!GetModuleFileNameW( NULL, exe_path, ARRAY_SIZE(exe_path) )) return TRUE;
+    lstrcpyW( manifest_path, exe_path );
+    if (!(sep = wcsrchr( manifest_path, '\\' ))) return TRUE;
+    sep[1] = 0;    /* manifest_path is now the application directory, trailing slash included */
+
+    /* The package path is that directory without the trailing separator. */
+    dir_len = lstrlenW( manifest_path );
+    if (!(package_path = HeapAlloc( GetProcessHeap(), 0, (dir_len + 1) * sizeof(WCHAR) ))) return TRUE;
+    lstrcpyW( package_path, manifest_path );
+    if (dir_len > 3) package_path[dir_len - 1] = 0;   /* keep "C:\" intact */
+
+    file = INVALID_HANDLE_VALUE;
+    for (i = 0; i < ARRAY_SIZE(manifest_names) && file == INVALID_HANDLE_VALUE; i++)
+    {
+        /* Extracted packages are not consistent about the casing, and the host
+         * file system underneath a Wine drive may well be case sensitive. */
+        manifest_path[dir_len] = 0;
+        lstrcatW( manifest_path, manifest_names[i] );
+        file = CreateFileW( manifest_path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL );
+    }
+    if (file == INVALID_HANDLE_VALUE) goto done;
+
+    size = GetFileSize( file, NULL );
+    if (size == INVALID_FILE_SIZE || size > 0x100000) goto done;
+    if (!(xml = HeapAlloc( GetProcessHeap(), 0, size + 1 ))) goto done;
+    if (!ReadFile( file, xml, size, &read_size, NULL )) goto done;
+    xml[read_size] = 0;
+
+    package_name      = manifest_attribute( xml, "<Identity", "Name" );
+    package_publisher = manifest_attribute( xml, "<Identity", "Publisher" );
+    version_str       = manifest_attribute( xml, "<Identity", "Version" );
+    arch_str          = manifest_attribute( xml, "<Identity", "ProcessorArchitecture" );
+    package_app_id    = manifest_attribute( xml, "<Application ", "Id" );
+
+    if (!package_name || !package_publisher || !version_str) goto done;
+
+    {
+        /* Parsed by hand: kernelbase does not import the C runtime's scanf. */
+        const WCHAR *p = version_str;
+        unsigned int v[4] = { 0, 0, 0, 0 }, n;
+
+        for (n = 0; n < 4; n++)
+        {
+            while (*p >= '0' && *p <= '9') v[n] = v[n] * 10 + (*p++ - '0');
+            if (*p != '.') break;
+            p++;
+        }
+        package_version.Major = v[0];
+        package_version.Minor = v[1];
+        package_version.Build = v[2];
+        package_version.Revision = v[3];
+    }
+
+    package_arch = arch_str ? processor_arch_from_string( arch_str, lstrlenW( arch_str ) )
+                            : PROCESSOR_ARCHITECTURE_AMD64;
+    if (package_arch == ~0u) package_arch = PROCESSOR_ARCHITECTURE_AMD64;
+
+    /* An unscoped package has an empty resource id, which is what produces the
+     * doubled underscore in a full name such as Name_1.0.0.0_x64__publisherid. */
+    package_resource_id = HeapAlloc( GetProcessHeap(), 0, sizeof(WCHAR) );
+    package_resource_id[0] = 0;
+
+    publisher_id_from_publisher( package_publisher, package_publisher_id );
+    package_identity_valid = TRUE;
+
+    TRACE( "identity from %s: name %s, publisher id %s, version %u.%u.%u.%u\n",
+           debugstr_w(manifest_path), debugstr_w(package_name), debugstr_w(package_publisher_id),
+           package_version.Major, package_version.Minor, package_version.Build, package_version.Revision );
+
+done:
+    HeapFree( GetProcessHeap(), 0, xml );
+    HeapFree( GetProcessHeap(), 0, version_str );
+    HeapFree( GetProcessHeap(), 0, arch_str );
+    if (file != INVALID_HANDLE_VALUE) CloseHandle( file );
+    return TRUE;
+}
+
+static BOOL have_package_identity(void)
+{
+    InitOnceExecuteOnce( &package_identity_once, init_package_identity, NULL, NULL );
+    return package_identity_valid;
+}
+
+static LONG return_string( const WCHAR *str, UINT32 *length, WCHAR *buffer )
+{
+    UINT32 needed = lstrlenW( str ) + 1;
+
+    if (!length) return ERROR_INVALID_PARAMETER;
+    if (!buffer || *length < needed)
+    {
+        *length = needed;
+        return ERROR_INSUFFICIENT_BUFFER;
+    }
+    lstrcpyW( buffer, str );
+    *length = needed;
+    return ERROR_SUCCESS;
+}
+
+static void fill_package_id( PACKAGE_ID *id )
+{
+    id->reserved = 0;
+    id->processorArchitecture = package_arch;
+    id->version = package_version;
+    id->name = package_name;
+    id->publisher = package_publisher;
+    id->resourceId = package_resource_id;
+    id->publisherId = package_publisher_id;
+}
+
+/***********************************************************************
  *         GetCurrentApplicationUserModelId   (kernelbase.@)
  */
 LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentApplicationUserModelId( UINT32 *length, WCHAR *id )
 {
-    FIXME( "(%p %p): stub\n", length, id );
-    return APPMODEL_ERROR_NO_APPLICATION;
+    WCHAR aumid[512];
+
+    TRACE( "(%p %p)\n", length, id );
+
+    if (!have_package_identity()) return APPMODEL_ERROR_NO_APPLICATION;
+    if (!package_app_id) return APPMODEL_ERROR_NO_APPLICATION;
+
+    swprintf( aumid, ARRAY_SIZE(aumid), L"%s_%s!%s", package_name, package_publisher_id, package_app_id );
+    return return_string( aumid, length, id );
 }
 
 /***********************************************************************
@@ -1590,8 +1891,14 @@ LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentApplicationUserModelId( UINT32 *le
  */
 LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackageFamilyName( UINT32 *length, WCHAR *name )
 {
-    FIXME( "(%p %p): stub\n", length, name );
-    return APPMODEL_ERROR_NO_PACKAGE;
+    WCHAR family[512];
+
+    TRACE( "(%p %p)\n", length, name );
+
+    if (!have_package_identity()) return APPMODEL_ERROR_NO_PACKAGE;
+
+    swprintf( family, ARRAY_SIZE(family), L"%s_%s", package_name, package_publisher_id );
+    return return_string( family, length, name );
 }
 
 
@@ -1600,8 +1907,14 @@ LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackageFamilyName( UINT32 *length,
  */
 LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackageFullName( UINT32 *length, WCHAR *name )
 {
-    FIXME( "(%p %p): stub\n", length, name );
-    return APPMODEL_ERROR_NO_PACKAGE;
+    PACKAGE_ID id;
+
+    TRACE( "(%p %p)\n", length, name );
+
+    if (!have_package_identity()) return APPMODEL_ERROR_NO_PACKAGE;
+
+    fill_package_id( &id );
+    return PackageFullNameFromId( &id, length, name );
 }
 
 
@@ -1610,8 +1923,36 @@ LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackageFullName( UINT32 *length, W
  */
 LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackageId( UINT32 *len, BYTE *buffer )
 {
-    FIXME( "(%p %p): stub\n", len, buffer );
-    return APPMODEL_ERROR_NO_PACKAGE;
+    UINT32 needed;
+    PACKAGE_ID *id;
+    WCHAR *str;
+
+    TRACE( "(%p %p)\n", len, buffer );
+
+    if (!len) return ERROR_INVALID_PARAMETER;
+    if (!have_package_identity()) return APPMODEL_ERROR_NO_PACKAGE;
+
+    needed = sizeof(PACKAGE_ID) + (lstrlenW( package_name ) + 1 + lstrlenW( package_publisher ) + 1
+                                   + lstrlenW( package_resource_id ) + 1
+                                   + lstrlenW( package_publisher_id ) + 1) * sizeof(WCHAR);
+    if (!buffer || *len < needed)
+    {
+        *len = needed;
+        return ERROR_INSUFFICIENT_BUFFER;
+    }
+
+    /* The strings live in the caller's buffer directly behind the struct. */
+    id = (PACKAGE_ID *)buffer;
+    str = (WCHAR *)(buffer + sizeof(PACKAGE_ID));
+    fill_package_id( id );
+
+    id->name = str;        lstrcpyW( str, package_name );         str += lstrlenW( str ) + 1;
+    id->publisher = str;   lstrcpyW( str, package_publisher );    str += lstrlenW( str ) + 1;
+    id->resourceId = str;  lstrcpyW( str, package_resource_id );  str += lstrlenW( str ) + 1;
+    id->publisherId = str; lstrcpyW( str, package_publisher_id );
+
+    *len = needed;
+    return ERROR_SUCCESS;
 }
 
 /***********************************************************************
@@ -1628,8 +1969,10 @@ LONG WINAPI GetCurrentPackageInfo( const UINT32 flags, UINT32 *buffer_size, BYTE
  */
 LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackagePath( UINT32 *length, WCHAR *path )
 {
-    FIXME( "(%p %p): stub\n", length, path );
-    return APPMODEL_ERROR_NO_PACKAGE;
+    TRACE( "(%p %p)\n", length, path );
+
+    if (!have_package_identity()) return APPMODEL_ERROR_NO_PACKAGE;
+    return return_string( package_path, length, path );
 }
 
 
