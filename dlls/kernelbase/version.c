@@ -1960,8 +1960,58 @@ LONG WINAPI /* DECLSPEC_HOTPATCH */ GetCurrentPackageId( UINT32 *len, BYTE *buff
  */
 LONG WINAPI GetCurrentPackageInfo( const UINT32 flags, UINT32 *buffer_size, BYTE *buffer, UINT32 *count )
 {
-    FIXME( "(%#x %p %p %p): stub\n", flags, buffer_size, buffer, count );
-    return APPMODEL_ERROR_NO_PACKAGE;
+    WCHAR full_name[512], family_name[512];
+    UINT32 needed, len;
+    PACKAGE_INFO *info;
+    PACKAGE_ID id;
+    WCHAR *str;
+
+    TRACE( "(%#x %p %p %p)\n", flags, buffer_size, buffer, count );
+
+    if (!buffer_size) return ERROR_INVALID_PARAMETER;
+    if (!have_package_identity()) return APPMODEL_ERROR_NO_PACKAGE;
+
+    fill_package_id( &id );
+    len = ARRAY_SIZE(full_name);
+    if (PackageFullNameFromId( &id, &len, full_name )) return APPMODEL_ERROR_NO_PACKAGE;
+    swprintf( family_name, ARRAY_SIZE(family_name), L"%s_%s", package_name, package_publisher_id );
+
+    /* One package: the one we are running from. The filter in `flags` selects
+     * between a package and its dependencies, and a title packaged on its own
+     * is the only answer to any of them. */
+    needed = sizeof(PACKAGE_INFO) + (lstrlenW( package_path ) + 1
+                                     + lstrlenW( full_name ) + 1
+                                     + lstrlenW( family_name ) + 1
+                                     + lstrlenW( package_name ) + 1
+                                     + lstrlenW( package_publisher ) + 1
+                                     + lstrlenW( package_resource_id ) + 1
+                                     + lstrlenW( package_publisher_id ) + 1) * sizeof(WCHAR);
+
+    if (count) *count = 1;
+    if (!buffer || *buffer_size < needed)
+    {
+        *buffer_size = needed;
+        return ERROR_INSUFFICIENT_BUFFER;
+    }
+
+    /* Strings live in the caller's buffer behind the struct, as the caller has
+     * no other way to know how long they are. */
+    info = (PACKAGE_INFO *)buffer;
+    str = (WCHAR *)(buffer + sizeof(PACKAGE_INFO));
+
+    memset( info, 0, sizeof(*info) );
+    fill_package_id( &info->packageId );
+
+    info->path = str;                  lstrcpyW( str, package_path );         str += lstrlenW( str ) + 1;
+    info->packageFullName = str;       lstrcpyW( str, full_name );            str += lstrlenW( str ) + 1;
+    info->packageFamilyName = str;     lstrcpyW( str, family_name );          str += lstrlenW( str ) + 1;
+    info->packageId.name = str;        lstrcpyW( str, package_name );         str += lstrlenW( str ) + 1;
+    info->packageId.publisher = str;   lstrcpyW( str, package_publisher );    str += lstrlenW( str ) + 1;
+    info->packageId.resourceId = str;  lstrcpyW( str, package_resource_id );  str += lstrlenW( str ) + 1;
+    info->packageId.publisherId = str; lstrcpyW( str, package_publisher_id );
+
+    *buffer_size = needed;
+    return ERROR_SUCCESS;
 }
 
 /***********************************************************************
