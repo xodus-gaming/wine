@@ -4225,10 +4225,11 @@ static DWORD socket_receive( struct socket *socket, void *buf, DWORD len, DWORD 
                  * is concerned. */
                 if (socket->state >= SOCKET_STATE_SHUTDOWN)
                 {
-                    TRACE( "socket %p is shutting down and the peer is quiet; "
-                           "completing the receive.\n", socket );
+                    ERR( "WS timeout socket %p state %d -> completing receive\n",
+                         socket, socket->state );
                     break;
                 }
+                ERR( "WS timeout socket %p state %d -> pong\n", socket, socket->state );
                 ret = socket_send_pong( socket );
             }
             if (ret) break;
@@ -4260,6 +4261,8 @@ static DWORD socket_receive( struct socket *socket, void *buf, DWORD len, DWORD 
 
 static void socket_receive_complete( struct socket *socket, DWORD ret, WINHTTP_WEB_SOCKET_BUFFER_TYPE type, DWORD len )
 {
+    ERR( "WS receive complete socket %p ret %lu type %u len %lu state %d\n",
+         socket, ret, type, len, socket->state );
     if (!ret)
     {
         WINHTTP_WEB_SOCKET_STATUS status;
@@ -4387,6 +4390,7 @@ static DWORD send_socket_shutdown( struct socket *socket, USHORT status, const v
 {
     DWORD ret;
 
+    ERR( "WS shutdown requested socket %p state %d\n", socket, socket->state );
     if (socket->state < SOCKET_STATE_SHUTDOWN) socket->state = SOCKET_STATE_SHUTDOWN;
 
     if (socket->hdr.flags & WINHTTP_FLAG_ASYNC)
@@ -4545,6 +4549,7 @@ DWORD WINAPI WinHttpWebSocketClose( HINTERNET hsocket, USHORT status, void *reas
     }
 
     prev_state = socket->state;
+    ERR( "WS closed socket %p\n", socket );
     socket->state = SOCKET_STATE_CLOSED;
 
     if (socket->hdr.flags & WINHTTP_FLAG_ASYNC)
@@ -4602,9 +4607,13 @@ DWORD WINAPI WinHttpWebSocketQueryCloseStatus( HINTERNET hsocket, USHORT *status
         return ERROR_WINHTTP_INCORRECT_HANDLE_TYPE;
     }
 
+    ERR( "WS querycloses socket %p received %d err %lu status %u reason_len %u buflen %lu\n",
+         socket, socket->close_frame_received, socket->close_frame_receive_err,
+         socket->status, socket->reason_len, len );
     if (!socket->close_frame_received || socket->close_frame_receive_err)
     {
         ret = socket->close_frame_received ? socket->close_frame_receive_err : ERROR_INVALID_OPERATION;
+        ERR( "WS querycloses socket %p FAILED ret %lu\n", socket, ret );
         release_object( &socket->hdr );
         return ret;
     }
