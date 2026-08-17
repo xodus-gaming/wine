@@ -4206,7 +4206,31 @@ static DWORD socket_receive( struct socket *socket, void *buf, DWORD len, DWORD 
                 if (!(socket->opcode & CONTROL_BIT) || (ret = handle_control_frame( socket ))
                     || socket->opcode == SOCKET_OPCODE_CLOSE) break;
             }
-            else if (ret == WSAETIMEDOUT) ret = socket_send_pong( socket );
+            else if (ret == WSAETIMEDOUT)
+            {
+                /* Once our own close frame has gone out the peer owes us
+                 * nothing but its reply, so keeping the connection alive with
+                 * pings and waiting again only leaves the caller's receive
+                 * outstanding for as long as the peer stays quiet.
+                 *
+                 * That matters beyond tidiness: a caller learns a websocket
+                 * has gone only when a receive completes, so a peer that never
+                 * sends its close reply leaves the socket looking connected
+                 * forever. libHttpClient will not begin its network cleanup
+                 * while one is, which hangs a title on exit -- Expedition 33
+                 * quits and then spins on its message pump indefinitely.
+                 *
+                 * Surfacing the timeout completes the receive, and a receive
+                 * that ends in an error is a disconnect as far as the caller
+                 * is concerned. */
+                if (socket->state >= SOCKET_STATE_SHUTDOWN)
+                {
+                    TRACE( "socket %p is shutting down and the peer is quiet; "
+                           "completing the receive.\n", socket );
+                    break;
+                }
+                ret = socket_send_pong( socket );
+            }
             if (ret) break;
         }
     }
