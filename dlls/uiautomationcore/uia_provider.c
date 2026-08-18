@@ -2310,6 +2310,23 @@ LRESULT WINAPI UiaReturnRawElementProvider(HWND hwnd, WPARAM wparam,
 }
 
 /***********************************************************************
+ *          UiaDisconnectAllProviders (uiautomationcore.@)
+ *
+ * Nothing is disconnected here yet, but the export has to exist: a title only
+ * calls this while tearing down its accessibility support on the way out, and
+ * an unimplemented entry point aborts the process instead of returning. Unity
+ * titles do exactly that -- Deep Rock Galactic Survivor raised the debugger and
+ * an error dialog on every exit, after the game had otherwise shut down
+ * cleanly. Answering S_OK costs a caller nothing at that point; telling it the
+ * teardown failed would serve no one.
+ */
+HRESULT WINAPI UiaDisconnectAllProviders(void)
+{
+    FIXME("() stub!\n");
+    return S_OK;
+}
+
+/***********************************************************************
  *          UiaDisconnectProvider (uiautomationcore.@)
  */
 HRESULT WINAPI UiaDisconnectProvider(IRawElementProviderSimple *elprov)
