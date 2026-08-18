@@ -50,6 +50,9 @@ void send_callback( struct object_header *hdr, DWORD status, void *info, DWORD b
         ERR( "WS callback hdr %p status %#lx delivered %d (callback %p mask %#lx)\n",
              hdr, status, !!(hdr->callback && (hdr->notify_mask & status)),
              hdr->callback, hdr->notify_mask );
+    else if (hdr->type == WINHTTP_HANDLE_TYPE_REQUEST)
+        ERR( "REQ callback hdr %p status %#lx delivered %d\n",
+             hdr, status, !!(hdr->callback && (hdr->notify_mask & status)) );
     if (hdr->callback && (hdr->notify_mask & status))
     {
         TRACE( "%p, %#lx, %p, %lu, %lu\n", hdr, status, info, buflen, hdr->recursion_count );
