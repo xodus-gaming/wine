@@ -592,6 +592,7 @@ end:
  */
 HINTERNET WINAPI WinHttpConnect( HINTERNET hsession, const WCHAR *server, INTERNET_PORT port, DWORD reserved )
 {
+    ERR( "HOST connect to %s:%u\n", wine_dbgstr_w(server), port );
     struct connect *connect;
     struct session *session;
     HINTERNET hconnect = NULL;
