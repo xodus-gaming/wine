@@ -4924,6 +4924,21 @@ NTSTATUS WINAPI NtCreateFile( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIBU
         status = STATUS_SUCCESS;
     }
 
+    /* An image published through WINE_DLL_FILE_MAP is only on disk as encrypted
+     * package content; the plaintext lives in a memfd. A title that reads its
+     * own executable -- Resident Evil 2 hashes re2.exe and refuses to start
+     * otherwise -- has to be given the same bytes the loader ran. Reads only:
+     * the memfd is read-only, and a caller wanting to write should get the file
+     * it asked for. */
+    if (status == STATUS_SUCCESS && disposition == FILE_OPEN &&
+        !(access & (GENERIC_WRITE | FILE_WRITE_DATA | FILE_APPEND_DATA | DELETE)) &&
+        !open_mapped_file_reread( &nt_name, unix_name, handle ))
+    {
+        TRACE( "serving %s from its memfd\n", unix_name );
+        io->Information = FILE_OPENED;
+        goto done;
+    }
+
     if (status == STATUS_SUCCESS)
     {
         name_hidden = is_hidden_file( unix_name );

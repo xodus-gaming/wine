@@ -336,6 +336,8 @@ extern NTSTATUS load_builtin_unixlib( void *module, const char *name );
 /* Resolves an NT name to an inherited fd listed in WINE_DLL_FILE_MAP, for
  * images that exist only as a memfd and never as a readable file on disk. */
 extern NTSTATUS open_mapped_file_handle( const UNICODE_STRING *nt_name, HANDLE *handle );
+extern NTSTATUS open_mapped_file_reread( const UNICODE_STRING *nt_name, const char *unix_name,
+                                        HANDLE *handle );
 
 extern NTSTATUS get_thread_ldt_entry( HANDLE handle, THREAD_DESCRIPTOR_INFORMATION *info, ULONG len );
 extern void *get_native_context( CONTEXT *context );

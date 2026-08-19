@@ -1574,13 +1574,56 @@ static NTSTATUS open_mapped_dll_file( const UNICODE_STRING *nt_name, HANDLE *map
     return status;
 }
 
+static NTSTATUS mapped_file_handle( const UNICODE_STRING *nt_name, const char *unix_name,
+                                    HANDLE *handle, BOOL reopen );
+
+NTSTATUS open_mapped_file_handle( const UNICODE_STRING *nt_name, HANDLE *handle )
+{
+    return mapped_file_handle( nt_name, NULL, handle, FALSE );
+}
+
 /***********************************************************************
  *           open_mapped_file_handle
  *
  * Resolves an NT name to an inherited file descriptor listed in
  * WINE_DLL_FILE_MAP, for images that exist only as a memfd and never on disk.
  */
-NTSTATUS open_mapped_file_handle( const UNICODE_STRING *nt_name, HANDLE *handle )
+/* Whether a unix path and an NT name from the map denote the same file.
+ *
+ * The NT name is \??\<drive>:<path>; the unix path ends with that same path
+ * under the prefix's dosdevices link. Separators differ, and so does case on
+ * the way through, so the tail is compared loosely. */
+static BOOL unix_path_matches_nt_name( const char *unix_name, const char *nt_name, size_t nt_len )
+{
+    const char *tail;
+    size_t unix_len, i;
+
+    if (!unix_name) return FALSE;
+    /* Past "\??\X:" -- four for the prefix, two for the drive and colon. */
+    if (nt_len <= 6 || nt_name[0] != '\\' || nt_name[1] != '?') return FALSE;
+    tail = nt_name + 6;
+    nt_len -= 6;
+    if (!nt_len) return FALSE;
+
+    unix_len = strlen( unix_name );
+    if (unix_len < nt_len) return FALSE;
+    unix_name += unix_len - nt_len;
+
+    for (i = 0; i < nt_len; i++)
+    {
+        char a = unix_name[i], b = tail[i];
+
+        if (a == '\\') a = '/';
+        if (b == '\\') b = '/';
+        if (a >= 'A' && a <= 'Z') a += 'a' - 'A';
+        if (b >= 'A' && b <= 'Z') b += 'a' - 'A';
+        if (a != b) return FALSE;
+    }
+    return TRUE;
+}
+
+static NTSTATUS mapped_file_handle( const UNICODE_STRING *nt_name, const char *unix_name,
+                                    HANDLE *handle, BOOL reopen )
 {
     const char *value = getenv( "WINE_DLL_FILE_MAP" );
     const char *entry, *sep, *end;
@@ -1590,14 +1633,31 @@ NTSTATUS open_mapped_file_handle( const UNICODE_STRING *nt_name, HANDLE *handle 
 
     if (!value || !*value) return STATUS_DLL_NOT_FOUND;
 
-    if ((status = utf8_wcstombs_size(nt_name->Buffer, nt_name->Length / sizeof(WCHAR), &allocLen)))
+    /* Called from the ordinary file path as well as the loader now, and that
+     * reaches here with names the loader never produces -- an empty one among
+     * them. Converting from a null buffer faults, and a fault inside a file
+     * open takes the loader down with it. */
+    /* Converting from a null buffer faults, and a fault inside a file open takes
+     * the loader down with it. An open can legitimately arrive without an NT
+     * name -- a title opening its own executable does -- and those are matched
+     * on the unix path instead. */
+    if (!nt_name || !nt_name->Buffer || !nt_name->Length)
     {
-        return status;
+        if (!unix_name) return STATUS_DLL_NOT_FOUND;
+        utf8_name = NULL;
+        allocLen = 0;
     }
-    utf8_name = alloca(allocLen);
-    if ((status = utf8_wcstombs(utf8_name, allocLen, &allocLen, nt_name->Buffer, nt_name->Length / sizeof(WCHAR))))
+    else
     {
-        return status;
+        if ((status = utf8_wcstombs_size(nt_name->Buffer, nt_name->Length / sizeof(WCHAR), &allocLen)))
+        {
+            return status;
+        }
+        utf8_name = alloca(allocLen);
+        if ((status = utf8_wcstombs(utf8_name, allocLen, &allocLen, nt_name->Buffer, nt_name->Length / sizeof(WCHAR))))
+        {
+            return status;
+        }
     }
 
     for (entry = value; *entry; entry = *end ? end + 1 : end)
@@ -1624,11 +1684,43 @@ NTSTATUS open_mapped_file_handle( const UNICODE_STRING *nt_name, HANDLE *handle 
         }
         if (fd < 0 || sep == entry || sep + 1 == end) continue;
         len = end - sep - 1;
-        if (len != allocLen || strncmp( sep + 1, utf8_name, len )) continue;
+        if (utf8_name)
+        {
+            if (len != allocLen || strncmp( sep + 1, utf8_name, len )) continue;
+        }
+        else if (!unix_path_matches_nt_name( unix_name, sep + 1, len )) continue;
 
+        if (reopen)
+        {
+            char proc[64];
+            NTSTATUS ret;
+            int copy;
+
+            /* A dup of the inherited descriptor would share its file offset,
+             * so a title reading the image would move the loader's position and
+             * the other way about. Reopening through /proc/self/fd gives an
+             * independent one onto the same memfd. */
+            snprintf( proc, sizeof(proc), "/proc/self/fd/%d", fd );
+            if ((copy = open( proc, O_RDONLY )) == -1) return STATUS_DLL_NOT_FOUND;
+            ret = wine_server_fd_to_handle( copy, GENERIC_READ | SYNCHRONIZE, 0, handle );
+            close( copy );
+            return ret;
+        }
         return wine_server_fd_to_handle( fd, GENERIC_READ | SYNCHRONIZE, 0, handle );
     }
     return STATUS_DLL_NOT_FOUND;
+}
+
+/***********************************************************************
+ *           open_mapped_file_reread
+ *
+ * As above, but for a caller that reads the image itself rather than loading
+ * it: each gets its own position onto the same memfd.
+ */
+NTSTATUS open_mapped_file_reread( const UNICODE_STRING *nt_name, const char *unix_name,
+                                  HANDLE *handle )
+{
+    return mapped_file_handle( nt_name, unix_name, handle, TRUE );
 }
 
 
