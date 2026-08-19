@@ -21,13 +21,32 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(twinapi);
 
+/* A registration this module never raises anything against.
+ *
+ * Nothing here is read; it exists so the caller has a distinct pointer to hold
+ * and to hand back when it unregisters. */
+struct notification_registration
+{
+    void *routine;
+    void *context;
+};
+
 /***********************************************************************
  *           RegisterAppConstrainedChangeNotification (twinapi.appcore.@)
  */
 ULONG WINAPI RegisterAppConstrainedChangeNotification( PAPPCONSTRAIN_CHANGE_ROUTINE routine, void *context, PAPPCONSTRAIN_REGISTRATION *reg )
 {
-    FIXME( "routine %p, context %p, reg %p - stub.\n", routine, context, reg );
-    return ERROR_CALL_NOT_IMPLEMENTED;
+    struct notification_registration *impl;
+
+    FIXME( "routine %p, context %p, reg %p: accepted, no constraint change will be raised.\n",
+           routine, context, reg );
+
+    if (!reg) return ERROR_INVALID_PARAMETER;
+    if (!(impl = calloc( 1, sizeof(*impl) ))) return ERROR_OUTOFMEMORY;
+    impl->routine = routine;
+    impl->context = context;
+    *reg = (PAPPCONSTRAIN_REGISTRATION)impl;
+    return ERROR_SUCCESS;
 }
 
 /***********************************************************************
@@ -35,8 +54,26 @@ ULONG WINAPI RegisterAppConstrainedChangeNotification( PAPPCONSTRAIN_CHANGE_ROUT
  */
 ULONG WINAPI RegisterAppStateChangeNotification( PAPPSTATE_CHANGE_ROUTINE routine, void *context, PAPPSTATE_REGISTRATION *reg )
 {
-    FIXME( "routine %p, context %p, reg %p - stub.\n", routine, context, reg );
-    return ERROR_CALL_NOT_IMPLEMENTED;
+    struct notification_registration *impl;
+
+    FIXME( "routine %p, context %p, reg %p: accepted, no state change will be raised.\n",
+           routine, context, reg );
+
+    if (!reg) return ERROR_INVALID_PARAMETER;
+
+    /* Refusing left *reg untouched, and a caller reads it back regardless of
+     * the result: an earlier title was seen unregistering 0x6572757463, which
+     * is leftover text off its own stack. Balatro takes the refusal itself as
+     * fatal and exits cleanly before opening a window, which looks exactly
+     * like a title that simply does not run.
+     *
+     * The app is never suspended or resumed here, so accepting costs nothing:
+     * the routine would never be called either way. */
+    if (!(impl = calloc( 1, sizeof(*impl) ))) return ERROR_OUTOFMEMORY;
+    impl->routine = routine;
+    impl->context = context;
+    *reg = (PAPPSTATE_REGISTRATION)impl;
+    return ERROR_SUCCESS;
 }
 
 /***********************************************************************
@@ -44,7 +81,8 @@ ULONG WINAPI RegisterAppStateChangeNotification( PAPPSTATE_CHANGE_ROUTINE routin
  */
 void WINAPI UnregisterAppConstrainedChangeNotification( PAPPCONSTRAIN_REGISTRATION reg )
 {
-    FIXME( "reg %p - stub.\n", reg );
+    TRACE( "reg %p.\n", reg );
+    free( reg );
 }
 
 /***********************************************************************
@@ -52,7 +90,8 @@ void WINAPI UnregisterAppConstrainedChangeNotification( PAPPCONSTRAIN_REGISTRATI
  */
 void WINAPI UnregisterAppStateChangeNotification( PAPPSTATE_REGISTRATION reg )
 {
-    FIXME( "reg %p - stub.\n", reg );
+    TRACE( "reg %p.\n", reg );
+    free( reg );
 }
 
 HRESULT WINAPI DllGetClassObject( REFCLSID clsid, REFIID riid, void **out )
