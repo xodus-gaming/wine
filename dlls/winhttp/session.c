@@ -47,11 +47,11 @@ WINE_DEFAULT_DEBUG_CHANNEL(winhttp);
 void send_callback( struct object_header *hdr, DWORD status, void *info, DWORD buflen )
 {
     if (hdr->type == WINHTTP_HANDLE_TYPE_SOCKET)
-        ERR( "WS callback hdr %p status %#lx delivered %d (callback %p mask %#lx)\n",
+        TRACE( "WS callback hdr %p status %#lx delivered %d (callback %p mask %#lx)\n",
              hdr, status, !!(hdr->callback && (hdr->notify_mask & status)),
              hdr->callback, hdr->notify_mask );
     else if (hdr->type == WINHTTP_HANDLE_TYPE_REQUEST)
-        ERR( "REQ callback hdr %p status %#lx delivered %d\n",
+        TRACE( "REQ callback hdr %p status %#lx delivered %d\n",
              hdr, status, !!(hdr->callback && (hdr->notify_mask & status)) );
     if (hdr->callback && (hdr->notify_mask & status))
     {
@@ -592,7 +592,7 @@ end:
  */
 HINTERNET WINAPI WinHttpConnect( HINTERNET hsession, const WCHAR *server, INTERNET_PORT port, DWORD reserved )
 {
-    ERR( "HOST connect to %s:%u\n", wine_dbgstr_w(server), port );
+    TRACE( "HOST connect to %s:%u\n", wine_dbgstr_w(server), port );
     struct connect *connect;
     struct session *session;
     HINTERNET hconnect = NULL;
