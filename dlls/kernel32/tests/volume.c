@@ -666,11 +666,14 @@ static void test_disk_extents(void)
 
 static void test_disk_trim_property(HANDLE handle)
 {
+    static const DWORD partial_sizes[] = {9, 10, 11};
     STORAGE_PROPERTY_QUERY query = {0};
     STORAGE_DESCRIPTOR_HEADER header;
     struct trim_descriptor trim;
     BYTE short_header[sizeof(header) - 1];
+    BYTE partial[sizeof(trim)];
     DWORD error, size;
+    unsigned int i, j;
     BOOL ret;
 
     query.PropertyId = StorageDeviceTrimProperty;
@@ -693,6 +696,24 @@ static void test_disk_trim_property(HANDLE handle)
     ok(header.Version == sizeof(trim), "expected version %Iu, got %lu\n", sizeof(trim), header.Version);
     ok(header.Size == sizeof(trim), "expected size %Iu, got %lu\n", sizeof(trim), header.Size);
 
+    for (i = 0; i < ARRAY_SIZE(partial_sizes); ++i)
+    {
+        memset(partial, 0xcc, sizeof(partial));
+        SetLastError(0xdeadbeef);
+        ret = DeviceIoControl(handle, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query), partial, partial_sizes[i],
+                              &size, NULL);
+        error = GetLastError();
+        ok(ret, "TRIM query with %lu-byte output failed, error %#lx\n", partial_sizes[i], error);
+        ok(size == sizeof(header), "expected %Iu bytes, got %lu for output size %lu\n", sizeof(header), size,
+           partial_sizes[i]);
+        ok(((STORAGE_DESCRIPTOR_HEADER *)partial)->Version == 12, "expected version 12, got %lu\n",
+           ((STORAGE_DESCRIPTOR_HEADER *)partial)->Version);
+        ok(((STORAGE_DESCRIPTOR_HEADER *)partial)->Size == 12, "expected size 12, got %lu\n",
+           ((STORAGE_DESCRIPTOR_HEADER *)partial)->Size);
+        for (j = sizeof(header); j < partial_sizes[i]; ++j)
+            ok(partial[j] == 0xcc, "byte %u changed to %#x for output size %lu\n", j, partial[j], partial_sizes[i]);
+    }
+
     memset(&trim, 0xcc, sizeof(trim));
     SetLastError(0xdeadbeef);
     ret = DeviceIoControl(handle, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query), &trim, sizeof(trim), &size,
@@ -702,15 +723,19 @@ static void test_disk_trim_property(HANDLE handle)
     ok(size == sizeof(trim), "expected %Iu bytes, got %lu\n", sizeof(trim), size);
     ok(trim.Version == sizeof(trim), "expected version %Iu, got %lu\n", sizeof(trim), trim.Version);
     ok(trim.Size == sizeof(trim), "expected size %Iu, got %lu\n", sizeof(trim), trim.Size);
-    ok(trim.TrimEnabled, "expected compatibility TRIM support\n");
+    ok(trim.TrimEnabled == TRUE || broken(trim.TrimEnabled == FALSE),
+       "expected compatibility TRIM support, got %u\n", trim.TrimEnabled);
+    for (i = offsetof(struct trim_descriptor, TrimEnabled) + sizeof(trim.TrimEnabled); i < sizeof(trim); ++i)
+        ok(((BYTE *)&trim)[i] == 0, "expected zero padding at byte %u, got %#x\n", i, ((BYTE *)&trim)[i]);
 
-    query.PropertyId = StorageDeviceWriteAggregationProperty;
+    query.PropertyId = (STORAGE_PROPERTY_ID)~0u;
     SetLastError(0xdeadbeef);
     ret = DeviceIoControl(handle, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query), &header, sizeof(header), &size,
                           NULL);
     error = GetLastError();
     ok(!ret, "unknown property unexpectedly succeeded\n");
-    ok(error == ERROR_NOT_SUPPORTED || broken(error == ERROR_INVALID_FUNCTION),
+    ok(error == ERROR_NOT_SUPPORTED || broken(error == ERROR_INVALID_FUNCTION) ||
+       broken(error == ERROR_INVALID_PARAMETER),
        "expected unsupported-property error, got %#lx\n", error);
 }
 
