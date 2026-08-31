@@ -20,27 +20,6 @@
 #ifndef __WINE_WINDOWS_GAMING_INPUT_PROVIDER_PRIVATE_H
 #define __WINE_WINDOWS_GAMING_INPUT_PROVIDER_PRIVATE_H
 
-static inline HRESULT provider_create_nonroamable_id(const WCHAR *path, UINT16 vid, UINT16 pid, HSTRING *value)
-{
-    const WCHAR *xi, *instance;
-    WCHAR buffer[1024];
-    int len;
-
-    if (vid == 0x28de && pid == 0x11ff) return E_NOTIMPL;
-
-    for (xi = path; *xi; ++xi)
-    {
-        if (xi[0] != L'&' || !xi[1]) continue;
-        if ((xi[1] != L'x' && xi[1] != L'X') || !xi[2]) continue;
-        if ((xi[2] != L'i' && xi[2] != L'I') || xi[3] != L'_') continue;
-        break;
-    }
-    if (!*xi || !(instance = wcschr(xi + 4, L'#')) || !instance[1]) return E_NOTIMPL;
-
-    ++instance;
-    len = swprintf(buffer, ARRAY_SIZE(buffer), L"{wgi/nrid/:wine-%04X&%04X&%ls}", vid, pid, instance);
-    if (len < 0 || len >= (int)ARRAY_SIZE(buffer)) return E_BOUNDS;
-    return WindowsCreateString(buffer, len, value);
-}
+HRESULT provider_create_nonroamable_id( const WCHAR *path, UINT16 vid, UINT16 pid, HSTRING *value );
 
 #endif /* __WINE_WINDOWS_GAMING_INPUT_PROVIDER_PRIVATE_H */

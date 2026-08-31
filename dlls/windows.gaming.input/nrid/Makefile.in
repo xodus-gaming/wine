@@ -1,0 +1,4 @@
+STATICLIB = libwgi_private.a
+
+SOURCES = \
+	nrid.c
