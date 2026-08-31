@@ -52,6 +52,14 @@ struct COMPLETE_DVD_MANUFACTURER_DESCRIPTOR
 #pragma pack(pop)
 C_ASSERT(sizeof(struct COMPLETE_DVD_MANUFACTURER_DESCRIPTOR) == 2053);
 
+struct trim_descriptor
+{
+    DWORD Version;
+    DWORD Size;
+    BOOLEAN TrimEnabled;
+};
+C_ASSERT(sizeof(struct trim_descriptor) == 12);
+
 static HINSTANCE hdll;
 static HANDLE (WINAPI *pFindFirstVolumeA)(LPSTR,DWORD);
 static BOOL (WINAPI *pFindNextVolumeA)(HANDLE,LPSTR,DWORD);
@@ -656,6 +664,56 @@ static void test_disk_extents(void)
     CloseHandle( handle );
 }
 
+static void test_disk_trim_property(HANDLE handle)
+{
+    STORAGE_PROPERTY_QUERY query = {0};
+    STORAGE_DESCRIPTOR_HEADER header;
+    struct trim_descriptor trim;
+    BYTE short_header[sizeof(header) - 1];
+    DWORD error, size;
+    BOOL ret;
+
+    query.PropertyId = StorageDeviceTrimProperty;
+    query.QueryType = PropertyStandardQuery;
+
+    SetLastError(0xdeadbeef);
+    ret = DeviceIoControl(handle, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query), short_header,
+                          sizeof(short_header), &size, NULL);
+    error = GetLastError();
+    ok(!ret, "short TRIM header unexpectedly succeeded\n");
+    ok(error == ERROR_INVALID_PARAMETER, "expected ERROR_INVALID_PARAMETER, got %#lx\n", error);
+
+    memset(&header, 0xcc, sizeof(header));
+    SetLastError(0xdeadbeef);
+    ret = DeviceIoControl(handle, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query), &header, sizeof(header), &size,
+                          NULL);
+    error = GetLastError();
+    ok(ret, "TRIM header query failed, error %#lx\n", error);
+    ok(size == sizeof(header), "expected %Iu bytes, got %lu\n", sizeof(header), size);
+    ok(header.Version == sizeof(trim), "expected version %Iu, got %lu\n", sizeof(trim), header.Version);
+    ok(header.Size == sizeof(trim), "expected size %Iu, got %lu\n", sizeof(trim), header.Size);
+
+    memset(&trim, 0xcc, sizeof(trim));
+    SetLastError(0xdeadbeef);
+    ret = DeviceIoControl(handle, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query), &trim, sizeof(trim), &size,
+                          NULL);
+    error = GetLastError();
+    ok(ret, "TRIM query failed, error %#lx\n", error);
+    ok(size == sizeof(trim), "expected %Iu bytes, got %lu\n", sizeof(trim), size);
+    ok(trim.Version == sizeof(trim), "expected version %Iu, got %lu\n", sizeof(trim), trim.Version);
+    ok(trim.Size == sizeof(trim), "expected size %Iu, got %lu\n", sizeof(trim), trim.Size);
+    ok(trim.TrimEnabled, "expected compatibility TRIM support\n");
+
+    query.PropertyId = StorageDeviceWriteAggregationProperty;
+    SetLastError(0xdeadbeef);
+    ret = DeviceIoControl(handle, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query), &header, sizeof(header), &size,
+                          NULL);
+    error = GetLastError();
+    ok(!ret, "unknown property unexpectedly succeeded\n");
+    ok(error == ERROR_NOT_SUPPORTED || broken(error == ERROR_INVALID_FUNCTION),
+       "expected unsupported-property error, got %#lx\n", error);
+}
+
 static void test_disk_query_property(void)
 {
     STORAGE_PROPERTY_QUERY query = {0};
@@ -674,6 +732,8 @@ static void test_disk_query_property(void)
         win_skip("can't open \\\\.\\PhysicalDrive0 %#lx\n", GetLastError());
         return;
     }
+
+    test_disk_trim_property(handle);
 
     query.PropertyId = StorageDeviceProperty;
     query.QueryType = PropertyStandardQuery;
