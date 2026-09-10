@@ -182,12 +182,126 @@ static const WSAPROTOCOL_INFOW supported_protocols[] =
         .iProtocol = BTHPROTO_RFCOMM,
         .szProtocol = L"MSAFD RfComm [Bluetooth]",
     },
+    {
+        .dwServiceFlags1 = XP1_GUARANTEED_DELIVERY | XP1_GUARANTEED_ORDER | XP1_IFS_HANDLES,
+        .dwProviderFlags = PFL_MATCHES_PROTOCOL_ZERO,
+        .ProviderId = {0xa00943d9, 0x9c2e, 0x4633, {0x9b, 0x59, 0x00, 0x57, 0xa3, 0x16, 0x09, 0x94}},
+        .dwCatalogEntryId = 1007,
+        .ProtocolChain.ChainLen = 1,
+        .iVersion = 2,
+        .iAddressFamily = AF_UNIX,
+        .iMaxSockAddr = sizeof(struct sockaddr_un),
+        .iMinSockAddr = offsetof(struct sockaddr_un, sun_path),
+        .iSocketType = SOCK_STREAM,
+        .szProtocol = L"AF_UNIX",
+    },
 };
 
 DECLARE_CRITICAL_SECTION(cs_socket_list);
 
 static SOCKET *socket_list;
 static unsigned int socket_list_size;
+
+static inline const char *debugstr_sockdomain(int domain)
+{
+    const char *stropt = NULL;
+
+#define DEBUG_SOCKDOM(x) case (x): stropt = #x; break
+
+    switch(domain)
+    {
+        DEBUG_SOCKDOM(AF_12844);
+        DEBUG_SOCKDOM(AF_APPLETALK);
+        DEBUG_SOCKDOM(AF_ATM);
+        DEBUG_SOCKDOM(AF_BAN);
+        DEBUG_SOCKDOM(AF_BTH);
+        DEBUG_SOCKDOM(AF_CCITT);
+        DEBUG_SOCKDOM(AF_CHAOS);
+        DEBUG_SOCKDOM(AF_CLUSTER);
+        DEBUG_SOCKDOM(AF_DATAKIT);
+        DEBUG_SOCKDOM(AF_DECnet);
+        DEBUG_SOCKDOM(AF_DLI);
+        DEBUG_SOCKDOM(AF_ECMA);
+        DEBUG_SOCKDOM(AF_FIREFOX);
+        DEBUG_SOCKDOM(AF_HYLINK);
+        DEBUG_SOCKDOM(AF_HYPERV);
+        DEBUG_SOCKDOM(AF_ICLFXBM);
+        DEBUG_SOCKDOM(AF_IMPLINK);
+        DEBUG_SOCKDOM(AF_INET);
+        DEBUG_SOCKDOM(AF_INET6);
+        DEBUG_SOCKDOM(AF_IPX);
+        DEBUG_SOCKDOM(AF_IRDA);
+        DEBUG_SOCKDOM(AF_ISO);
+        DEBUG_SOCKDOM(AF_LAT);
+        DEBUG_SOCKDOM(AF_LINK);
+        DEBUG_SOCKDOM(AF_MAX);
+        DEBUG_SOCKDOM(AF_NETBIOS);
+        DEBUG_SOCKDOM(AF_NETDES);
+        /* duplicated cases */
+        /* DEBUG_SOCKDOM(AF_NS);*/
+        /* DEBUG_SOCKDOM(AF_OSI); */
+        DEBUG_SOCKDOM(AF_PUP);
+        DEBUG_SOCKDOM(AF_SNA);
+        DEBUG_SOCKDOM(AF_TCNMESSAGE);
+        DEBUG_SOCKDOM(AF_TCNPROCESS);
+        DEBUG_SOCKDOM(AF_UNIX);
+        DEBUG_SOCKDOM(AF_UNKNOWN1);
+        DEBUG_SOCKDOM(AF_UNSPEC);
+        DEBUG_SOCKDOM(AF_VOICEVIEW);
+        default: stropt = wine_dbg_sprintf("0x%x", domain);
+    }
+
+#undef DEBUG_SOCKDOM
+
+    return stropt;
+}
+
+static inline const char *debugstr_socktype(int type)
+{
+    const char *stropt = NULL;
+
+#define DEBUG_SOCKTYPE(x) case (x): stropt = #x; break
+
+    switch(type)
+    {
+        DEBUG_SOCKTYPE(SOCK_DGRAM);
+        DEBUG_SOCKTYPE(SOCK_RAW);
+        DEBUG_SOCKTYPE(SOCK_RDM);
+        DEBUG_SOCKTYPE(SOCK_SEQPACKET);
+        DEBUG_SOCKTYPE(SOCK_STREAM);
+        default: stropt = wine_dbg_sprintf("0x%x", type);
+    }
+
+#undef DEBUG_SOCKTYPE
+
+    return stropt;
+}
+
+static inline const char *debugstr_sockprotocol(int protocol)
+{
+    const char *stropt = NULL;
+
+#define DEBUG_SOCKPROTO(x) case (x): stropt = #x; break
+
+    switch(protocol)
+    {
+        DEBUG_SOCKPROTO(IPPROTO_GGP);
+        DEBUG_SOCKPROTO(IPPROTO_ICMP);
+        DEBUG_SOCKPROTO(IPPROTO_IDP);
+        DEBUG_SOCKPROTO(IPPROTO_IGMP);
+        DEBUG_SOCKPROTO(IPPROTO_IP);
+        DEBUG_SOCKPROTO(IPPROTO_MAX);
+        DEBUG_SOCKPROTO(IPPROTO_ND);
+        DEBUG_SOCKPROTO(IPPROTO_RAW);
+        DEBUG_SOCKPROTO(IPPROTO_TCP);
+        DEBUG_SOCKPROTO(IPPROTO_UDP);
+        default: stropt = wine_dbg_sprintf("0x%x", protocol);
+    }
+
+#undef DEBUG_SOCKPROTO
+
+    return stropt;
+}
 
 const char *debugstr_sockaddr( const struct sockaddr *a )
 {
@@ -251,6 +365,11 @@ const char *debugstr_sockaddr( const struct sockaddr *a )
                                  bth_addr.rgBytes[5], bth_addr.rgBytes[4], bth_addr.rgBytes[3], bth_addr.rgBytes[2],
                                  bth_addr.rgBytes[1], bth_addr.rgBytes[0], wine_dbgstr_guid( &addr->serviceClassId ),
                                  addr->port );
+    }
+    case AF_UNIX:
+    {
+        return wine_dbg_sprintf("{ family AF_UNIX, path %s }",
+                                ((const SOCKADDR_UN *)a)->sun_path);
     }
     default:
         return wine_dbg_sprintf("{ family %d }", a->sa_family);
@@ -785,8 +904,8 @@ static BOOL ws_protocol_info(SOCKET s, int unicode, WSAPROTOCOL_INFOW *buffer, i
             return TRUE;
         }
     }
-    FIXME( "Could not fill protocol information for family %d, type %d, protocol %d.\n",
-            params.family, params.type, params.protocol );
+    FIXME( "Could not fill protocol information for family %s, type %s, protocol %s.\n",
+            debugstr_sockdomain(params.family), debugstr_socktype(params.type), debugstr_sockprotocol(params.protocol) );
     return TRUE;
 }
 
@@ -1150,6 +1269,9 @@ int WINAPI bind( SOCKET s, const struct sockaddr *addr, int len )
     IO_STATUS_BLOCK io;
     HANDLE sync_event;
     NTSTATUS status;
+    const int bind_len = len;
+    char *unix_path = NULL;
+    int unix_varargs_size = 0;
 
     TRACE( "socket %#Ix, addr %s, len %d\n", s, debugstr_sockaddr(addr), len );
 
@@ -1199,6 +1321,15 @@ int WINAPI bind( SOCKET s, const struct sockaddr *addr, int len )
                 return -1;
             }
             break;
+
+        case AF_UNIX:
+            if (len < offsetof(struct sockaddr_un, sun_path))
+            {
+                SetLastError( WSAEFAULT );
+                return -1;
+            }
+            break;
+
         default:
             FIXME( "unknown protocol %u\n", addr->sa_family );
             SetLastError( WSAEAFNOSUPPORT );
@@ -1207,7 +1338,31 @@ int WINAPI bind( SOCKET s, const struct sockaddr *addr, int len )
 
     if (!(sync_event = get_sync_event())) return -1;
 
-    params = malloc( sizeof(int) + len );
+    if (addr->sa_family == AF_UNIX && *addr->sa_data)
+    {
+        /* The corresponding unix path is appended to a buffer with
+         * the structure sockaddr_un and can have a length of <= PATH_MAX */
+        struct sockaddr_un sun = { 0 };
+        WCHAR *sun_pathW;
+        memcpy(&sun, addr, len);
+        if (strlen( sun.sun_path ))
+        {
+            sun_pathW = strdupAtoW( sun.sun_path );
+            unix_path = wine_get_unix_file_name( sun_pathW );
+            free( sun_pathW );
+            if (!unix_path)
+                return SOCKET_ERROR;
+        }
+        else
+        {
+            unix_path = malloc(1);
+            *unix_path = '\0';
+        }
+        len = sizeof(sun);
+        unix_varargs_size = strlen( unix_path );
+    }
+
+    params = malloc( sizeof(int) + len + unix_varargs_size );
     ret_addr = malloc( len );
     if (!params || !ret_addr)
     {
@@ -1217,10 +1372,14 @@ int WINAPI bind( SOCKET s, const struct sockaddr *addr, int len )
         return -1;
     }
     params->unknown = 0;
-    memcpy( &params->addr, addr, len );
+    if (addr->sa_family == AF_UNIX)
+        memset( &params->addr, 0, len );
+    memcpy( &params->addr, addr, bind_len );
+    if (unix_path)
+        memcpy( (char *)&params->addr + len, unix_path, unix_varargs_size );
 
     status = NtDeviceIoControlFile( (HANDLE)s, sync_event, NULL, NULL, &io, IOCTL_AFD_BIND,
-                                    params, sizeof(int) + len, ret_addr, len );
+                                    params, sizeof(int) + len + unix_varargs_size, ret_addr, len );
     if (status == STATUS_PENDING)
     {
         if (WaitForSingleObject( sync_event, INFINITE ) == WAIT_FAILED)
@@ -1233,6 +1392,7 @@ int WINAPI bind( SOCKET s, const struct sockaddr *addr, int len )
 
     free( params );
     free( ret_addr );
+    free( unix_path );
 
     SetLastError( NtStatusToWSAError( status ) );
     return status ? -1 : 0;
@@ -1252,7 +1412,7 @@ int WINAPI closesocket( SOCKET s )
         return -1;
     }
 
-    if (!socket_list_remove( s ))
+    if (!socket_list_remove( s ) && !is_valid_socket( s ))
     {
         SetLastError( WSAENOTSOCK );
         return -1;
@@ -1273,11 +1433,24 @@ int WINAPI connect( SOCKET s, const struct sockaddr *addr, int len )
     HANDLE sync_event;
     NTSTATUS status;
 
+    char *unix_path = NULL;
+    int unix_varargs_size = 0;
+
     TRACE( "socket %#Ix, addr %s, len %d\n", s, debugstr_sockaddr(addr), len );
 
     if (!(sync_event = get_sync_event())) return -1;
 
-    if (!(params = malloc( sizeof(*params) + len )))
+    if (addr->sa_family == AF_UNIX && *addr->sa_data)
+    {
+        WCHAR *sun_pathW = strdupAtoW(addr->sa_data);
+        unix_path = wine_get_unix_file_name(sun_pathW);
+        free(sun_pathW);
+        if (!unix_path)
+            return SOCKET_ERROR;
+        unix_varargs_size = strlen(unix_path);
+    }
+
+    if (!(params = malloc( sizeof(*params) + len + unix_varargs_size )))
     {
         SetLastError( ERROR_NOT_ENOUGH_MEMORY );
         return -1;
@@ -1285,10 +1458,13 @@ int WINAPI connect( SOCKET s, const struct sockaddr *addr, int len )
     params->addr_len = len;
     params->synchronous = TRUE;
     memcpy( params + 1, addr, len );
+    if (unix_path)
+        memcpy( (char *)(params + 1) + len, unix_path, unix_varargs_size );
 
     status = NtDeviceIoControlFile( (HANDLE)s, sync_event, NULL, NULL, &io, IOCTL_AFD_WINE_CONNECT,
-                                    params, sizeof(*params) + len, NULL, 0 );
+                                    params, sizeof(*params) + len + unix_varargs_size, NULL, 0 );
     free( params );
+    free( unix_path );
     if (status == STATUS_PENDING)
     {
         if (wait_event_alertable( sync_event ) == WAIT_FAILED) return -1;
@@ -3702,7 +3878,7 @@ int WINAPI shutdown( SOCKET s, int how )
  */
 SOCKET WINAPI socket( int af, int type, int protocol )
 {
-    TRACE("af=%d type=%d protocol=%d\n", af, type, protocol);
+    TRACE("af=%s type=%s protocol=%s\n", debugstr_sockdomain(af), debugstr_socktype(type), debugstr_sockprotocol(protocol));
 
     return WSASocketW( af, type, protocol, NULL, 0,
                        get_per_thread_data()->opentype ? 0 : WSA_FLAG_OVERLAPPED );
@@ -3952,8 +4128,8 @@ SOCKET WINAPI WSASocketW(int af, int type, int protocol,
       g, dwFlags except WSA_FLAG_OVERLAPPED) are ignored.
    */
 
-    TRACE( "family %d, type %d, protocol %d, info %p, group %u, flags %#lx\n",
-           af, type, protocol, lpProtocolInfo, g, flags );
+    TRACE( "family %s, type %s, protocol %s, info %p, group %u, flags %#lx\n",
+           debugstr_sockdomain(af), debugstr_socktype(type), debugstr_sockprotocol(protocol), lpProtocolInfo, g, flags );
 
     if (!num_startup)
     {
