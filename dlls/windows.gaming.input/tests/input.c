@@ -34,6 +34,90 @@
 
 #include "wine/test.h"
 
+#include "../provider_private.h"
+
+struct nrid_case
+{
+    const WCHAR *path;
+    UINT16 vid;
+    UINT16 pid;
+    HRESULT expected_hr;
+    const WCHAR *expected;
+};
+
+static void test_provider_create_nonroamable_id(void)
+{
+    static const struct nrid_case cases[] =
+    {
+        {L"\\\\?\\hid#vid_045e&pid_0b12&xi_00#synthetic&0&0000", 0x045e, 0x0b12, S_OK,
+         L"{wgi/nrid/:wine-045E&0B12&synthetic&0&0000}"},
+        {L"\\\\?\\HID#VID_1234&PID_ABCD&XI_01#uppercase&1&0001", 0x1234, 0xabcd, S_OK,
+         L"{wgi/nrid/:wine-1234&ABCD&uppercase&1&0001}"},
+        {L"\\\\?\\hid#vid_045e&pid_0b12&xi_00#same-model-a&0&0000", 0x045e, 0x0b12, S_OK,
+         L"{wgi/nrid/:wine-045E&0B12&same-model-a&0&0000}"},
+        {L"\\\\?\\hid#vid_045e&pid_0b12&xi_01#same-model-b&0&0000", 0x045e, 0x0b12, S_OK,
+         L"{wgi/nrid/:wine-045E&0B12&same-model-b&0&0000}"},
+        {L"malformed", 0x045e, 0x0b12, E_NOTIMPL, NULL},
+        {L"\\\\?\\hid#vid_045e&pid_0b12&ig_00#synthetic&0&0000", 0x045e, 0x0b12, E_NOTIMPL, NULL},
+        {L"\\\\?\\hid#vid_045e&pid_0b12&xi_00", 0x045e, 0x0b12, E_NOTIMPL, NULL},
+        {L"\\\\?\\hid#vid_045e&pid_0b12&xi_00#", 0x045e, 0x0b12, E_NOTIMPL, NULL},
+        {L"\\\\?\\hid#vid_045e&pid_0b12&xi_#empty-slot&0&0000", 0x045e, 0x0b12, E_NOTIMPL, NULL},
+        {L"\\\\?\\hid#vid_045e&pid_0b12&xi_0#short-slot&0&0000", 0x045e, 0x0b12, E_NOTIMPL, NULL},
+        {L"\\\\?\\hid#vid_045e&pid_0b12&xi_000#long-slot&0&0000", 0x045e, 0x0b12, E_NOTIMPL, NULL},
+        {L"\\\\?\\hid#vid_045e&pid_0b12&xi_a0#non-digit-slot&0&0000", 0x045e, 0x0b12, E_NOTIMPL, NULL},
+        {L"\\\\?\\hid#vid_045e&pid_0b12&ig_00#instance&xi_00#nested", 0x045e, 0x0b12, E_NOTIMPL, NULL},
+    };
+    const WCHAR *actual;
+    HSTRING value;
+    HRESULT hr;
+    UINT32 i;
+
+    for (i = 0; i < ARRAY_SIZE( cases ); ++i)
+    {
+        winetest_push_context("case %u", i);
+        value = NULL;
+        hr = provider_create_nonroamable_id( cases[i].path, cases[i].vid, cases[i].pid, &value );
+        ok(hr == cases[i].expected_hr, "got hr %#lx, expected %#lx\n", hr, cases[i].expected_hr);
+        if (hr == S_OK)
+        {
+            actual = WindowsGetStringRawBuffer( value, NULL );
+            ok(!wcscmp( actual, cases[i].expected ), "got %s, expected %s\n",
+                    debugstr_w( actual ), debugstr_w( cases[i].expected ));
+        }
+        ok((hr == S_OK) == !!value, "got value %p for hr %#lx\n", value, hr);
+        if (value) WindowsDeleteString( value );
+        winetest_pop_context();
+    }
+}
+
+static void test_provider_create_nonroamable_id_bounds(void)
+{
+    static const WCHAR prefix[] = L"\\\\?\\hid#vid_045e&pid_0b12&xi_00#";
+    WCHAR path[1100];
+    HSTRING value = NULL;
+    HRESULT hr;
+    UINT32 i;
+
+    wcscpy( path, prefix );
+    for (i = wcslen( path ); i < ARRAY_SIZE( path ) - 1; ++i) path[i] = 'a';
+    path[i] = 0;
+
+    hr = provider_create_nonroamable_id( path, 0x045e, 0x0b12, &value );
+    ok(hr == E_BOUNDS, "got hr %#lx, expected E_BOUNDS\n", hr);
+    ok(!value, "got value %p\n", value);
+}
+
+static void test_provider_create_nonroamable_id_steam(void)
+{
+    static const WCHAR path[] = L"\\\\?\\hid#vid_28de&pid_11ff&xi_00#steam-instance&0&0000";
+    HSTRING value = NULL;
+    HRESULT hr;
+
+    hr = provider_create_nonroamable_id( path, 0x28de, 0x11ff, &value );
+    ok(hr == E_NOTIMPL, "physical identity builder returned %#lx for Steam virtual controller\n", hr);
+    ok(!value, "got value %p\n", value);
+}
+
 struct gamepad_event_handler
 {
     IEventHandler_Gamepad IEventHandler_Gamepad_iface;
@@ -390,6 +474,9 @@ static void test_RawGameController(void)
 
 START_TEST(input)
 {
+    test_provider_create_nonroamable_id();
+    test_provider_create_nonroamable_id_bounds();
+    test_provider_create_nonroamable_id_steam();
     test_Gamepad();
     test_RawGameController();
 }

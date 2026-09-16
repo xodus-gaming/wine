@@ -23,6 +23,7 @@
 #include "ddk/hidsdi.h"
 #include "dinput.h"
 #include "provider.h"
+#include "provider_private.h"
 #include "hidusage.h"
 
 #include "wine/debug.h"
@@ -197,7 +198,7 @@ static HRESULT WINAPI wine_provider_get_NonRoamableId( IWineGameControllerProvid
         return WindowsCreateString( buffer, len, value );
     }
 
-    return E_NOTIMPL;
+    return provider_create_nonroamable_id( impl->device_path, vid, pid, value );
 }
 
 static HRESULT WINAPI wine_provider_get_DisplayName( IWineGameControllerProvider *iface, HSTRING *value )

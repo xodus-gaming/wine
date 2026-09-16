@@ -1,0 +1,6 @@
+EXTLIB = libwgi_private.a
+EXTRADEFS = -D__WINESRC__
+IMPORTS = msvcrt
+
+SOURCES = \
+	nrid.c
