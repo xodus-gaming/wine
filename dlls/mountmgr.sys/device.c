@@ -1526,6 +1526,14 @@ NTSTATUS query_unix_drive( void *buff, SIZE_T insize, SIZE_T outsize, IO_STATUS_
     return status;
 }
 
+struct trim_descriptor
+{
+    DWORD Version;
+    DWORD Size;
+    BOOLEAN TrimEnabled;
+};
+C_ASSERT(sizeof(struct trim_descriptor) == 12);
+
 static NTSTATUS query_property( struct disk_device *device, IRP *irp )
 {
     IO_STACK_LOCATION *irpsp = IoGetCurrentIrpStackLocation( irp );
@@ -1613,6 +1621,30 @@ static NTSTATUS query_property( struct disk_device *device, IRP *irp )
 
                 memset( d, 0, sizeof(*d) );
                 d->Version = d->Size = sizeof(*d);
+                irp->IoStatus.Information = sizeof(*d);
+            }
+            status = STATUS_SUCCESS;
+        }
+        break;
+    }
+    case StorageDeviceTrimProperty:
+    {
+        struct trim_descriptor *d = irp->AssociatedIrp.SystemBuffer;
+
+        if (irpsp->Parameters.DeviceIoControl.OutputBufferLength < sizeof(STORAGE_DESCRIPTOR_HEADER))
+            status = STATUS_INVALID_PARAMETER;
+        else
+        {
+            d->Version = d->Size = sizeof(*d);
+            if (irpsp->Parameters.DeviceIoControl.OutputBufferLength < sizeof(*d))
+                irp->IoStatus.Information = sizeof(STORAGE_DESCRIPTOR_HEADER);
+            else
+            {
+                FIXME( "Faking StorageDeviceTrimProperty data.\n" );
+
+                memset( d, 0, sizeof(*d) );
+                d->Version = d->Size = sizeof(*d);
+                d->TrimEnabled = TRUE;
                 irp->IoStatus.Information = sizeof(*d);
             }
             status = STATUS_SUCCESS;
