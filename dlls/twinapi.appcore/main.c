@@ -30,13 +30,38 @@ ULONG WINAPI RegisterAppConstrainedChangeNotification( PAPPCONSTRAIN_CHANGE_ROUT
     return ERROR_CALL_NOT_IMPLEMENTED;
 }
 
+/* Opaque registration handle for RegisterAppStateChangeNotification().
+ *
+ * On real Windows this API always succeeds for a normal foreground desktop
+ * app and returns a valid PAPPSTATE_REGISTRATION handle (the callback is
+ * only ever invoked later, on suspend/resume, which never happens for an
+ * unpackaged desktop process). GDK/XGameRuntime app bring-up treats a
+ * non-ERROR_SUCCESS return from this call as fatal and aborts startup
+ * (calls XGameRuntimeUninitialize + exit(0)), so returning
+ * ERROR_CALL_NOT_IMPLEMENTED here - as the previous stub did - causes any
+ * GDK title to quietly exit right after this call. See appnotify.h /
+ * MSDN: "If this function succeeds, it returns ERROR_SUCCESS." */
+struct app_state_registration
+{
+    PAPPSTATE_CHANGE_ROUTINE routine;
+    void *context;
+};
+
 /***********************************************************************
  *           RegisterAppStateChangeNotification (twinapi.appcore.@)
  */
 ULONG WINAPI RegisterAppStateChangeNotification( PAPPSTATE_CHANGE_ROUTINE routine, void *context, PAPPSTATE_REGISTRATION *reg )
 {
-    FIXME( "routine %p, context %p, reg %p - stub.\n", routine, context, reg );
-    return ERROR_CALL_NOT_IMPLEMENTED;
+    struct app_state_registration *registration;
+
+    FIXME( "routine %p, context %p, reg %p - semi-stub, never notifies suspend/resume.\n", routine, context, reg );
+
+    if (!(registration = calloc( 1, sizeof(*registration) ))) return ERROR_OUTOFMEMORY;
+    registration->routine = routine;
+    registration->context = context;
+
+    *reg = (PAPPSTATE_REGISTRATION)registration;
+    return ERROR_SUCCESS;
 }
 
 /***********************************************************************
@@ -53,6 +78,7 @@ void WINAPI UnregisterAppConstrainedChangeNotification( PAPPCONSTRAIN_REGISTRATI
 void WINAPI UnregisterAppStateChangeNotification( PAPPSTATE_REGISTRATION reg )
 {
     FIXME( "reg %p - stub.\n", reg );
+    free( reg );
 }
 
 HRESULT WINAPI DllGetClassObject( REFCLSID clsid, REFIID riid, void **out )
