@@ -1927,6 +1927,53 @@ void get_nt_name( struct fd *fd, struct unicode_str *name )
     name->len = fd->nt_namelen;
 }
 
+/***********************************************************************
+ *           get_mapped_exe_file
+ */
+static int get_mapped_exe_file( const char* name, size_t name_len )
+{
+    const char *value;
+    const char *entry, *sep, *end;
+    size_t unix_name_len;
+    const char *unix_name;
+    int found_fd = -1;
+    if (name_len < 4 || strcasecmp( name + name_len - 4, ".exe" )) return found_fd;
+    value = getenv( "WINE_EXE_FILE_MAP" );
+    if (!value || !*value) return found_fd;
+    unix_name = name;
+    unix_name_len = name_len;
+
+    for (entry = value; *entry; entry = *end ? end + 1 : end)
+    {
+        size_t len;
+        int fd = 0;
+        const char *p;
+
+        end = strchr( entry, '|' );
+        if (!end) end = entry + strlen( entry );
+        if (end == entry) continue;
+
+        sep = strchr( entry, ':' );
+        if (!sep || sep >= end) continue;
+
+        for (p = entry; p < sep; p++)
+        {
+            if (*p < '0' || *p > '9')
+            {
+                fd = -1;
+                break;
+            }
+            fd = fd * 10 + (*p - '0');
+        }
+        if (fd < 0 || sep == entry || sep + 1 == end) continue;
+        len = end - sep - 1;
+        if (len != unix_name_len || strncmp( sep + 1, unix_name, len )) continue;
+        found_fd = fd;
+        break;
+    }
+    return found_fd;
+}
+
 /* open() wrapper that returns a struct fd with no fd user set */
 struct fd *open_fd( struct fd *root, const char *name, struct unicode_str nt_name,
                     int flags, mode_t *mode, unsigned int access,
@@ -2076,6 +2123,11 @@ struct fd *open_fd( struct fd *root, const char *name, struct unicode_str nt_nam
         {
             fd->unix_name = realpath( path, NULL );
             free( path );
+        }
+        int _fd;
+        _fd = get_mapped_exe_file( fd->unix_name, strlen( fd->unix_name ) );
+        if (_fd != -1) {
+            dup2(_fd, fd->unix_fd);
         }
 
         closed_fd->unix_fd = fd->unix_fd;

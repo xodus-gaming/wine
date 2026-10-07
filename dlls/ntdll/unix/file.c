@@ -1791,6 +1791,66 @@ static NTSTATUS fd_set_file_info( int fd, HANDLE handle, UINT attr, BOOL force_s
     return STATUS_SUCCESS;
 }
 
+/***********************************************************************
+ *           get_mapped_exe_file
+ */
+static int get_mapped_exe_file( const char* name, size_t name_len )
+{
+    const char *value;
+    const char *entry, *sep, *end;
+    size_t unix_name_len;
+    char *unix_name;
+    int found_fd = -1;
+    if (name_len < 4 || strcasecmp( name + name_len - 4, ".exe" )) return found_fd;
+    value = getenv( "WINE_EXE_FILE_MAP" );
+    if (!value || !*value) return found_fd;
+    unix_name = realpath( name, NULL );
+    if (!unix_name) return found_fd;
+    unix_name_len = strlen( unix_name );
+
+    for (entry = value; *entry; entry = *end ? end + 1 : end)
+    {
+        size_t len;
+        int fd = 0;
+        const char *p;
+
+        end = strchr( entry, '|' );
+        if (!end) end = entry + strlen( entry );
+        if (end == entry) continue;
+
+        sep = strchr( entry, ':' );
+        if (!sep || sep >= end) continue;
+
+        for (p = entry; p < sep; p++)
+        {
+            if (*p < '0' || *p > '9')
+            {
+                fd = -1;
+                break;
+            }
+            fd = fd * 10 + (*p - '0');
+        }
+        if (fd < 0 || sep == entry || sep + 1 == end) continue;
+        len = end - sep - 1;
+        if (len != unix_name_len || strncmp( sep + 1, unix_name, len )) continue;
+        found_fd = fd;
+        break;
+    }
+    free( unix_name );
+    return found_fd;
+}
+
+/***********************************************************************
+ *           stat_mapped_exe_file
+ */
+static void stat_mapped_exe_file( const char* name, size_t name_len, struct stat *st )
+{
+    int fd = get_mapped_exe_file( name, name_len );
+    if (fd != -1)
+    {
+        fstat( fd, st );
+    }
+}
 
 /* get the stat info and file attributes for a file (by name) */
 static int get_file_info( const char *path, struct stat *st, ULONG *attr, ULONG *reparse_tag )
@@ -1838,6 +1898,7 @@ static int get_file_info( const char *path, struct stat *st, ULONG *attr, ULONG 
 
         free( parent_path );
     }
+    stat_mapped_exe_file( path, len, st );
     *attr |= get_file_attributes( st );
 
     attr_len = xattr_get( path, XATTR_REPARSE, buffer, sizeof(buffer) );
